@@ -42,8 +42,14 @@ TOP_K = 5               # how many chunks to pull back per question
 #
 # 0.6 is a reasonable starting point, not a right answer. Milestone 4 has you
 # measure your own two groups of distances and put the cutoff in the gap.
+#
+# Measured on city_guides with the section chunker (Milestone 4): the five
+# in-corpus questions had best distances 0.19-0.47, the five OUT_OF_SCOPE
+# ones 0.81-0.98. 0.65 sits in that gap, nearer the in-corpus side because
+# a differently-worded real question can drift up to 0.5, while nothing
+# off-topic came within 0.15 of it.
 # Most corpora land somewhere between 0.45 and 0.75.
-THRESHOLD = 0.6
+THRESHOLD = 0.65
 
 
 # ─── Models ──────────────────────────────────────────────────────────────────
