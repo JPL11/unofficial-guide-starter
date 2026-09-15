@@ -3,17 +3,8 @@
 Five criteria that say what "working" means for this system, written in unit 1
 **before** any results existed.
 
-An acceptance criterion names a target: a number, a count, a rate, or something
-a person could plainly observe. *"Retrieval works"* is an opinion. *"For at
-least 4 of my 5 test questions, the top results include a chunk containing the
-answer"* is a criterion.
-
-Under each one, write a sentence or two on **why that target** and not a
-stricter or looser one. A reason that says something about your corpus or your
-pipeline earns credit; *"80% seemed reasonable"* does not.
-
-> Missing your own targets next unit costs you nothing. Setting a target so
-> easy you can't miss it does.
+Corpus: `city_guides` — fourteen long, sectioned travel guides for nine
+fictional towns. Test questions are in `questions.py`.
 
 ---
 
@@ -22,9 +13,13 @@ pipeline earns credit; *"80% seemed reasonable"* does not.
 For at least 4 of my 5 test questions, the retrieved chunks include one that
 contains the answer.
 
-**Why this target:**
-<!-- e.g. "One of my questions is about a topic only two documents mention, so
-     I expect that one to be hard." -->
+**Why this target:** Four of my five questions have their answer inside a
+single labelled section of a single guide (a drive time, a car-park time, a
+ticket price, a town name), so I expect retrieval to find those. The fifth
+("best time to visit Halden Bay") is spread over two guides and two sections,
+so that is the one I expect to be hard, and 4 of 5 leaves room for exactly one
+miss. 5 of 5 would be claiming the hard one works before I have seen it; 3 of 5
+would let two of the easy ones fail without me noticing.
 
 ---
 
@@ -32,9 +27,11 @@ contains the answer.
 
 Every answer the system produces names at least one source document.
 
-**Why this target:**
-<!-- Why all five and not four? What about your setup makes that achievable —
-     or what would have to go wrong for it not to be? -->
+**Why this target:** All five and not four, because the prompt hands the model
+each chunk with a `[from filename]` tag and the system instruction tells it to
+name the file. Nothing about the corpus makes that hard: every chunk has a
+filename attached. If this fails it means the model ignored the instruction,
+and even one miss would be a real bug in the prompt, not bad luck.
 
 ---
 
@@ -44,54 +41,53 @@ When I ask a question my documents clearly don't cover, the relevance gate
 stops it and the system returns "I don't have enough information about that" —
 in at least 4 of 5 tries.
 
-<!-- The five questions are the ones in `OUT_OF_SCOPE` at the bottom of
-     `questions.py`, and `run_eval.py` puts them through the gate and writes
-     what happened into your run log. Swap them for your own if you'd rather —
-     just keep five of them, or the "4 of 5" above has nothing to be 4 of. -->
+The five questions are the ones in `OUT_OF_SCOPE` at the bottom of
+`questions.py` (Mongolia, diesel engines, the 1994 World Cup, ibuprofen, Rust).
 
-**Why this target:**
-<!-- What did your distances look like when you set the cutoff in Milestone 4?
-     Was there a clean gap, or did the two groups overlap? -->
-
----
-
-## 4. Something about your chunks
-
-<!-- YOU WRITE THIS ONE.
-
-     How would you know if your chunks were the right size? Name something
-     countable or observable.
-
-     Examples of the right shape — don't copy these, they should come from
-     what you actually saw in Milestone 3:
-       - "At least 4 of 5 sampled chunks read as a complete thought, with no
-          sentence cut in half at either end."
-       - "No chunk is shorter than 200 characters, since anything below that
-          in my corpus turned out to be a heading with no content under it." -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** The guides are about travel in one small region, and the
+five out-of-scope questions are about different subjects entirely, so I expect
+a clear gap between the two groups of distances. I am leaving one miss allowed
+because "How do I change the oil in a diesel engine?" and "capital of Mongolia"
+share travel-ish vocabulary (driving, cities) with the guides, and the
+embedding model may pull one of them under the cutoff. I will set the cutoff in
+Milestone 4 from the measured gap, not from the 0.6 default.
 
 ---
 
-## 5. Your choice
+## 4. Chunks are one section each, and none is a fragment
 
-<!-- YOU WRITE THIS ONE TOO.
+Every chunk produced by `split_documents` is between 120 and 900 characters
+long, and no chunk contains more than one `##` section heading.
 
-     Pick something you actually care about getting right. It could be about
-     speed, about refusals, about a particular kind of question your corpus
-     handles badly, about source attribution being correct rather than merely
-     present — anything, as long as it names a number or an observable
-     outcome. -->
+**Why this target:** When I read the guides in Milestone 1, every one of them
+is a title paragraph followed by labelled `##` sections ("Getting there",
+"Eat and drink", "When to go"), and each section is one paragraph of roughly
+170 to 710 characters. That means "one section = one chunk" is the natural unit:
+a chunk with two headings in it answers two topics badly, and a chunk under
+120 characters can only be a bare title line with no content under it. The
+starter's fixed 800-character windows produced a 24-character chunk on this
+corpus and routinely put the end of one section and the start of the next in
+the same chunk, which is exactly what this criterion rules out. 900 is the
+upper bound because the longest section in the corpus is 711 characters plus a
+short title prefix, so anything longer means the chunker glued two sections
+together.
 
+---
 
+## 5. The named source is the right one
 
-**Why this target:**
+For all 5 test questions, the document the answer names is the document
+that actually contains the `expects` phrase for that question.
 
-
+**Why this target:** Criterion 2 only checks that *a* source is named. I care
+that it is the *correct* one, because a travel guide that cites the Marchwood
+guide for a Kestrelford fact is worse than useless: a reader would go to the
+wrong file to check. This corpus makes wrong attribution a real risk, since the
+"Practical notes" section is copied almost word for word into every town guide
+and the cross-cutting guides (transport, seasons, accessibility) repeat facts
+from the town guides. 5 of 5 rather than 4 of 5 because I check this by hand
+for only five questions, and if one is wrong I want that to count as a miss and
+get diagnosed rather than be absorbed by a margin.
 
 ---
 
@@ -102,31 +98,13 @@ in at least 4 of 5 tries.
      revise it, and that earns credit. But never delete or edit the original
      line. Add the revision underneath it, like this:
 
-         ## 1. Retrieved chunks contain the answer
-
-         For at least 4 of my 5 test questions, the retrieved chunks include
-         one that contains the answer.
-
-         **Why this target:** ...
-
-         > **Revised in unit 2:** For at least 4 of 5 questions, the top three
-         > results contain the answer.
+         > **Revised in unit 2:** ...
          >
-         > **Why revised:** I couldn't judge "the chunks include one that
-         > contains the answer" the same way twice — I scored two questions
-         > differently on Monday than on Wednesday. The new version is
-         > something I can actually check.
+         > **Why revised:** ...
 
      That's a revision because the criterion couldn't be MEASURED.
 
      Lowering a target because you missed it is not a revision, and it costs
-     you the point:
-
-         ✗ "I said 4 of 5 but got 2 of 5, so 2 of 5 is more realistic."
-
-     A number you missed stays where it is, gets diagnosed, and gets a fix
-     attempted. That's where the points are.
-
-     The whole reason the originals stay visible is so someone can see what you
-     said before you knew the answer.
+     you the point. A number you missed stays where it is, gets diagnosed, and
+     gets a fix attempted. That's where the points are.
      ───────────────────────────────────────────────────────────────────────── -->
