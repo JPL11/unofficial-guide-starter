@@ -22,6 +22,7 @@ to it, write down what you saw, and move on. That's a real observation about
 your pipeline, not giving up.
 """
 
+import re
 from dataclasses import dataclass
 
 import config
@@ -80,24 +81,120 @@ def fallback_split(
     return chunks
 
 
+# Sections shorter than this are merged into the section that follows them.
+# In city_guides the only things this catches are the bare "# Title" lines on
+# the four cross-cutting guides, which have no paragraph under them.
+MIN_SECTION_CHARS = 120
+
+# Sections longer than this get split again at a paragraph break. Nothing in
+# city_guides reaches it (longest section is 711 characters), so it is a
+# guard against a bigger corpus, not something that fires today.
+MAX_SECTION_CHARS = 900
+
+
+def _sections(text: str) -> list[tuple[str, str]]:
+    """
+    Split one markdown document into (heading, body) pairs at each '#' or
+    '##' heading line. Text before the first heading gets an empty heading.
+    """
+    sections: list[tuple[str, str]] = []
+    heading = ""
+    body: list[str] = []
+    for line in text.split("\n"):
+        if re.match(r"^#{1,2} ", line):
+            if body or heading:
+                sections.append((heading, "\n".join(body).strip()))
+            heading = line.lstrip("#").strip()
+            body = []
+        else:
+            body.append(line)
+    if body or heading:
+        sections.append((heading, "\n".join(body).strip()))
+    return sections
+
+
+def _split_long(body: str, limit: int) -> list[str]:
+    """Split an over-long body at paragraph breaks, keeping paragraphs whole."""
+    pieces: list[str] = []
+    current = ""
+    for para in re.split(r"\n\s*\n", body):
+        para = para.strip()
+        if not para:
+            continue
+        candidate = f"{current}\n\n{para}" if current else para
+        if current and len(candidate) > limit:
+            pieces.append(current)
+            current = para
+        else:
+            current = candidate
+    if current:
+        pieces.append(current)
+    return pieces
+
+
 def split_documents(documents: list[Document]) -> list[Chunk]:
     """
-    Split documents into chunks. ⚠️ REPLACE THE BODY OF THIS IN MILESTONE 3.
+    One labelled section = one chunk.
 
-    Right now it just calls the fallback. That is the plain, generic behaviour
-    the brief is talking about.
+    Every city_guides document is a "# Town" title, an intro paragraph, and
+    then a run of "## Getting there", "## Eat and drink", "## When to go" ...
+    sections, each one a single paragraph of roughly 170 to 710 characters.
+    The information a question wants is organised by heading, so the heading
+    is the right place to cut. Concretely:
 
-    When you write your own strategy, set `produced_by` to
-    "chunker.py::split_documents" so your README's Sample Chunks section names
-    the right function. `app.py chunks` prints that string for you.
-
-    Things worth thinking about before you write any code:
-      - Are your documents short posts or long guides?
-      - Is the useful information in one sentence, or spread over a paragraph?
-      - Would splitting on paragraph breaks keep more thoughts intact than
-        splitting on a character count?
+      - Cut at every '#' / '##' heading line.
+      - Prefix each chunk with "Town — Section" so a chunk still says which
+        town it is about after it has been pulled away from its document.
+        Without that, "Everything closes by 9pm" is true of some town and
+        useless on its own.
+      - Fold sections under MIN_SECTION_CHARS into the next section. That is
+        how the bare title line of guide_seasons.md ends up attached to its
+        first season instead of becoming a 26-character chunk.
+      - Re-split anything over MAX_SECTION_CHARS at a paragraph break.
+      - No character overlap. Sections do not share sentences, so overlap
+        would only copy the end of "Getting there" into "Getting around".
     """
-    return fallback_split(documents)
+    chunks: list[Chunk] = []
+    for doc in documents:
+        sections = _sections(doc.text)
+        title = sections[0][0] if sections and sections[0][0] else doc.source
+
+        # Merge fragments into the section that follows them.
+        merged: list[tuple[str, str]] = []
+        pending_heading, pending_body = "", ""
+        for heading, body in sections:
+            if pending_body:
+                body = f"{pending_body}\n\n{body}".strip()
+                heading = heading or pending_heading
+                pending_heading, pending_body = "", ""
+            if len(body) < MIN_SECTION_CHARS:
+                pending_heading, pending_body = heading, body
+                continue
+            merged.append((heading, body))
+        if pending_body:
+            if merged:
+                h, b = merged[-1]
+                merged[-1] = (h, f"{b}\n\n{pending_body}".strip())
+            else:
+                merged.append((pending_heading, pending_body))
+
+        index = 0
+        for heading, body in merged:
+            for piece in _split_long(body, MAX_SECTION_CHARS):
+                if heading and heading != title:
+                    text = f"{title} — {heading}\n{piece}"
+                else:
+                    text = f"{title}\n{piece}"
+                chunks.append(
+                    Chunk(
+                        text=text,
+                        source=doc.source,
+                        index=index,
+                        produced_by="chunker.py::split_documents",
+                    )
+                )
+                index += 1
+    return chunks
 
 
 def describe(chunks: list[Chunk]) -> str:
