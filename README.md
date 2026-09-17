@@ -228,6 +228,25 @@ measurement. I also asked for the `Town — Section` prefix on every chunk after
 seeing that the retrieved "When to go" section for Halden Bay wouldn't say
 which town it was about if the prefix weren't there.
 
+**3. (unit 2)** I asked Claude Code to build `tools/criteria_table.py` to turn
+the per-question results file into the per-criterion run log. Its first
+version reported criterion 2 as 1/5 and criterion 5 as 0/5, which I knew
+was wrong because I had just read fifteen answers with source lines. The
+regex that pulled answers out of the run file used the dot-all flag and
+swallowed every answer after the first into one match. Worth recording
+because a scorer that silently under-counts is the kind of bug that turns
+into a false MISSED in a run log, and the only reason it was caught is
+that I read the raw answers first.
+
+**4. (unit 2)** Before building hybrid search I asked it to run BM25 alone
+over the 94 chunks for the two weak questions, which is where the evidence
+in Diagnoses comes from. I did not ask it whether BM25 might hurt the other
+three; the drive-time regression was found by the after run, not predicted.
+The brief's suggested question ("tell me why that might not work") would
+have surfaced the missing stemming: "driving takes" versus "drive" and
+"take" is the kind of thing a model spots immediately when asked and never
+mentions when not.
+
 **2.** I asked Claude Code to run the five in-corpus and five out-of-scope
 questions through retrieval and lay the distances side by side. It proposed
 0.65 for the cutoff. I kept it, but the reasoning I wrote above is the part I
@@ -506,17 +525,66 @@ still cited the right file in every answer.
 
 ## What's Still Broken
 
-<!-- For each criterion still missed after your fix: what you'd do about it,
-     and why you stopped where you did.
+No criterion is missed after the fix, so this section is about the thing the
+criteria don't measure and the fix made visible.
 
-     "I ran out of time" is fine if it's true. Pretending nothing is left is
-     not.
+**The drive-time regression.** The answer chunk for "How long does it take to
+drive from Brightwater to Kestrelford?" is at rank 5 with hybrid search, held
+there only by the keep-the-embedding's-best rule. What I'd do: two small
+things to BM25, in this order, measuring after each. First, drop stop words
+from the query before scoring ("how", "does", "it", "take", "to", "from" are
+doing most of the damage). Second, weight the fusion toward the embedding,
+for example 2/(60+rank) for the embedding list and 1/(60+rank) for BM25, so a
+keyword-only hit needs to be strong to displace a semantic one. I expect the
+first alone to move that question back to rank 1 or 2 without undoing the
+gains on the other two. I stopped because the unit allows one change and
+this would be a second tuning pass on it; the honest result of the first
+pass is more useful to record than a tuned one would be.
 
-     Milestone 5. -->
+**Multi-file citations.** The car-park answer names three files in every run.
+All three contain the fact, so it passes criterion 5, but the reader gets
+three places to look for one number. What I'd do: change the grounding
+instruction from "name the file(s) you used" to "name the single file that
+states the fact; name a second only if it adds something the first does
+not." That's a prompt change, which is generation-stage, and not what my
+diagnosis pointed at, so it waits.
+
+**Everything else is not broken, it is untested.** Five questions is a small
+test. Every question has an answer that sits inside one section, with one
+exception that spans two. Nothing tests a question whose answer requires
+two sections from two different towns ("which is cheaper to stay in, Halden
+Bay or Kestrelford, in August?"), and nothing tests a question about a town
+that sounds plausible but isn't in the corpus. I'd add both kinds before
+trusting these numbers.
 
 ## What I'd Do Differently
 
-<!-- Knowing what you know now — which of your five criteria would you write
-     differently, and why?
+Three of the five criteria I'd rewrite for the next unit.
 
-     Milestone 5. -->
+**Criterion 1** is the big one. "The retrieved chunks include one that
+contains the answer, 4 of 5" was met before and after a change that moved
+the answer chunk from rank 1 to rank 5 on one question and from rank 4 to
+rank 2 on another. A criterion that cannot see either of those movements is
+not measuring retrieval quality, it is measuring whether top-k is big
+enough. I'd write: *"For at least 4 of 5 questions, the chunk containing the
+answer is in the top 3; for at least 3 of 5 it is rank 1."* Both numbers
+were 4 of 5 and 3 of 5 in this unit, so those targets are set at where the
+system actually is, and a change that helps or hurts would show.
+
+**Criterion 3** was safe. 4 of 5 with a 0.34 gap between the groups was never
+going to miss. I'd set it to 5 of 5 and add five *near-scope* questions to
+`OUT_OF_SCOPE` (a town that isn't in the corpus, a train that doesn't exist)
+with their own 4 of 5 target, because that is where a gate actually earns
+its keep and I have no evidence about it.
+
+**Criterion 4** is deterministic. It can only fail if the code changes, so
+three runs of it are one run. I'd keep it as a check but I wouldn't count it
+as one of the five; in its place I'd put something about the chunk prefix:
+*"For all 5 questions, the top chunk names the town the question asks
+about."* That would have caught the drive-time regression, where the top
+fused chunk was about walking, not about getting to Kestrelford.
+
+**Criterion 5** I'd keep, but tighten the wording so a three-file citation
+for a one-file fact counts as a partial miss: *"names exactly the file(s)
+that contain the fact, and no more than two."*
+
