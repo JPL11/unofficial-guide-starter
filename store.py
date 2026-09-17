@@ -320,7 +320,12 @@ def _fuse_with_keywords(question: str, vector_results: list[Result], collection,
     chosen = ordered[:top_k]
     if vector_results and vector_results[0].label not in chosen:
         chosen[-1] = vector_results[0].label   # the gate must see the true best
-    return [by_label[lbl] for lbl in chosen]
+
+    # Fusion decides WHICH chunks come back. They are still returned
+    # nearest-first by cosine distance, because that is the contract the rest
+    # of the pipeline (app.py's printout, the gate, tools/smoke_test.py) has
+    # with search(). The fused score is a selection signal, not a distance.
+    return sorted((by_label[lbl] for lbl in chosen), key=lambda r: r.distance)
 
 
 def index_exists(corpus: str | None = None, variant: str = "default") -> bool:

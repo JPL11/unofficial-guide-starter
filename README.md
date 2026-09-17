@@ -238,6 +238,15 @@ because a scorer that silently under-counts is the kind of bug that turns
 into a false MISSED in a run log, and the only reason it was caught is
 that I read the raw answers first.
 
+**5. (unit 2)** One thing to warn students about, found the hard way:
+`tools/smoke_test.py` sets `AI201_FAKE_EMBEDDINGS=1` and then calls
+`build_index` on the *real* Chroma directory, so running it after
+`app.py index` silently replaces your index with fake vectors. My first
+"after" run came back with every question refused at the gate and zero model
+calls. The fix is `python app.py index` again. I'd tell students: if the gate
+suddenly refuses everything and the distances look random, re-index before
+touching the cutoff.
+
 **4. (unit 2)** Before building hybrid search I asked it to run BM25 alone
 over the 94 chunks for the two weak questions, which is where the evidence
 in Diagnoses comes from. I did not ask it whether BM25 might hurt the other
@@ -447,13 +456,23 @@ one with a space). Nothing upstream of generation moved between runs.
 **What I changed:** hybrid search. `store.py::search` now retrieves the top 20
 chunks by embedding distance, ranks all 94 chunks by BM25 keyword score
 (`rank_bm25`, already in `requirements.txt`), fuses the two lists with
-reciprocal rank fusion (score = Σ 1/(60 + rank)), and returns the fused top 5.
-Every returned chunk keeps its real cosine distance, and the chunk the
-embedding ranked first is always kept, so the relevance gate sees exactly the
-same best distance as before and criterion 3 cannot move. `HYBRID_SEARCH = True`
-in `config.py` is the switch; `False` gives back the unit 1 system exactly.
-This is the only change to the pipeline in this unit. Chunker, cutoff, top-k,
-prompt and model are as submitted.
+reciprocal rank fusion (score = Σ 1/(60 + rank)), and keeps the fused top 5.
+Those five are returned nearest-first by their real cosine distance, which is
+the contract the rest of the pipeline has with `search` (the gate,
+`app.py retrieve`, and `tools/smoke_test.py` all assume it). So fusion decides
+*which* chunks the model sees; distance still decides their order. The chunk
+the embedding ranked first is always kept, so the relevance gate sees exactly
+the same best distance as before and criterion 3 cannot move.
+`HYBRID_SEARCH = True` in `config.py` is the switch; `False` gives back the
+unit 1 system exactly. This is the only change to the pipeline in this unit.
+Chunker, cutoff, top-k, prompt and model are as submitted.
+
+A note on how it got that shape: my first version returned the chunks in fused
+order, and the repo's own smoke test failed on "results are ordered nearest
+first". Rather than change the contract, I kept the fusion as a selection step
+and sorted the selected five by distance. The rank numbers below are for the
+final version. The first version's numbers are in "Did it help?" because they
+say something the final version hides.
 
 **Why I picked it:** the diagnosis above found that for two of five questions
 the answer chunk lost to neighbours that share the topic but not the exact
@@ -463,7 +482,7 @@ second. Keyword matching is the missing signal, so I added it.
 ### Run Log — After
 
 Produced by `python run_eval.py --label after`
-(`results/run_2026-09-16_1720_after.md`, `run_eval.py::main`), aggregated by
+(`results/run_2026-09-16_1725_after.md`, `run_eval.py::main`), aggregated by
 `tools/criteria_table.py`. Same five questions, same three runs, cache off.
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
@@ -476,70 +495,77 @@ Produced by `python run_eval.py --label after`
 
 Side by side, the table is identical to Before. The criteria as written
 cannot see this change, which is itself a finding (see What I'd Do
-Differently). The number the diagnosis was actually about is the rank of the
-answer chunk, and that did move:
+Differently). The number the diagnosis was actually about is the position of
+the answer chunk in the five the model is given, and that did move:
 
-| Question | Rank before (embedding only) | Rank after (hybrid) |
+| Question | Rank before (embedding only) | Rank after (hybrid, nearest-first) |
 |---|---|---|
-| Drive time to Kestrelford | 1 | **5** |
-| Halden Bay car parks | 2 | **1** |
+| Drive time to Kestrelford | 1 | 1 |
+| Halden Bay car parks | 2 | 2 |
 | Kestrelford tower price | 1 | 1 |
-| Easiest town with limited mobility | 4 | **2** |
+| Easiest town with limited mobility | 4 | **3** |
 | Best time for Halden Bay | 1 | 1 |
-| *Answer in top 3* | 4 of 5 | 4 of 5 |
+| *Answer in top 3* | 4 of 5 | **5 of 5** |
 | *Answer at rank 1* | 3 of 5 | 3 of 5 |
 
 Real output after the change, accessibility question, run 1
 (`generate.py::answer_from_chunks`):
 
 ```
-According to the provided document, Thornby Wells is the easiest town in the region to get around with limited mobility because it is flat, compact, and everything is close together.
+Thornby Wells is described as the easiest town in the region for getting around with limited mobility because it is flat, compact, and everything is within three minutes of everything else.
 
 Source: guide_accessibility.md
 ```
 
-**Did it help?** Partly, and it also broke something, and I can tell which
-is which.
+**Did it help?** A little, on one question, and I know exactly why it didn't
+do more.
 
-- It fixed the two cases the diagnosis named. The car-park answer chunk went
-  from rank 2 to 1 and the accessibility chunk from rank 4 to 2. The
-  mechanism worked as predicted: BM25 credited "fill" and "easiest".
-- It hurt the drive-time question, which went from rank 1 to rank 5, and it
-  is at 5 only because of the rule that always keeps the embedding's
-  top chunk. Without that safeguard the answer would have dropped out of the
-  top 5 entirely and criterion 1 would have gone to 4 of 5. The mechanism:
-  BM25 has no stemming and no stop-word list, so "how long does it take to
-  drive from Brightwater to Kestrelford" scores chunks on "long", "take",
-  "from", "Brightwater", "Kestrelford". The answer chunk says "Driving takes
-  55 minutes", and neither "driving" nor "takes" matches. BM25's top chunk
-  for that question was "Walking in the region — Seasonal notes", which
-  mentions both town names and the word "take", and the fusion let four such
-  chunks outrank the real answer.
-- Net on the measure I set out to move (answer in top 3): 4 of 5 before, 4
-  of 5 after. Different question missing each time. So by my own metric it
-  did not help, even though it fixed exactly what it was aimed at.
+- What moved: for the accessibility question, BM25 pushed two Corry Vale
+  chunks (topically similar, no useful words) out of the five and the answer
+  chunk went from fourth to third. Answer-in-top-3 went from 4 of 5 to 5 of 5.
+  That is the whole measurable gain, and it is a change in *which* chunks the
+  model sees, not their order.
+- What didn't move: the car-park answer is still second, behind "Halden Bay —
+  When to go" at 0.289 versus 0.326. Both were already in the five before; BM25
+  can't reorder chunks that are both selected, because I sort the final five
+  by distance. The fix fixed selection and the near miss was about ordering.
+- What the first version showed: in raw fused order (before I added the
+  distance sort) the ranks were 5, 1, 1, 2, 1. BM25 did exactly what the
+  diagnosis predicted for the two weak questions, and it put the drive-time
+  answer *fifth*, kept in the set only by the always-keep-the-embedding's-best
+  rule. Mechanism: BM25 here has no stemming and no stop-word list, so "how
+  long does it take to drive from Brightwater to Kestrelford" scores chunks
+  on "long", "take", "from" and the two town names. The answer chunk says
+  "Driving takes 55 minutes", and neither "driving" nor "takes" matches.
+  BM25's top chunk for that question was "Walking in the region — Seasonal
+  notes". Sorting by distance made that regression invisible in the final
+  table, but the safeguard is still doing work, and without it criterion 1
+  would have dropped to 4 of 5.
 
 Criterion 3 is unchanged at 5 of 5 with identical distances (0.808 to 0.982),
-as designed. Criteria 2 and 5 held at 5 of 5 on all three runs; the model
-still cited the right file in every answer.
+as designed. Criteria 2 and 5 held at 5 of 5 on all three runs.
 
 ## What's Still Broken
 
 No criterion is missed after the fix, so this section is about the thing the
 criteria don't measure and the fix made visible.
 
-**The drive-time regression.** The answer chunk for "How long does it take to
-drive from Brightwater to Kestrelford?" is at rank 5 with hybrid search, held
-there only by the keep-the-embedding's-best rule. What I'd do: two small
-things to BM25, in this order, measuring after each. First, drop stop words
-from the query before scoring ("how", "does", "it", "take", "to", "from" are
-doing most of the damage). Second, weight the fusion toward the embedding,
-for example 2/(60+rank) for the embedding list and 1/(60+rank) for BM25, so a
-keyword-only hit needs to be strong to displace a semantic one. I expect the
-first alone to move that question back to rank 1 or 2 without undoing the
-gains on the other two. I stopped because the unit allows one change and
-this would be a second tuning pass on it; the honest result of the first
-pass is more useful to record than a tuned one would be.
+**Hybrid search can select but not reorder.** The car-park answer is still
+behind the "When to go" chunk, and it always will be while the final five are
+sorted by cosine distance. The cleaner design is to return them in fused order
+and update the one place (the smoke test's "nearest first" check) that
+assumes distance order, or to keep the distance order but pass the fused
+order to the prompt. I stopped because either changes a contract other files
+rely on, and the unit allows one change.
+
+**BM25 without stemming or stop words.** The first version showed the
+drive-time answer chunk at fused rank 5, rescued by a safeguard. What I'd do,
+in order, measuring after each: drop stop words from the query before
+scoring ("how", "does", "it", "take", "to", "from" did most of the damage),
+then weight the fusion toward the embedding (2/(60+rank) for the embedding
+list, 1/(60+rank) for BM25) so a keyword-only hit needs to be strong to
+displace a semantic one. I expect the first alone to fix it. Not done for
+the same reason: it is a second tuning pass on the one change.
 
 **Multi-file citations.** The car-park answer names three files in every run.
 All three contain the fact, so it passes criterion 5, but the reader gets
@@ -563,13 +589,14 @@ Three of the five criteria I'd rewrite for the next unit.
 
 **Criterion 1** is the big one. "The retrieved chunks include one that
 contains the answer, 4 of 5" was met before and after a change that moved
-the answer chunk from rank 1 to rank 5 on one question and from rank 4 to
-rank 2 on another. A criterion that cannot see either of those movements is
+the answer chunk from rank 4 to rank 3 on one question, and in its first
+version put another question's answer at fused rank 5. A criterion that cannot see either of those movements is
 not measuring retrieval quality, it is measuring whether top-k is big
 enough. I'd write: *"For at least 4 of 5 questions, the chunk containing the
-answer is in the top 3; for at least 3 of 5 it is rank 1."* Both numbers
-were 4 of 5 and 3 of 5 in this unit, so those targets are set at where the
-system actually is, and a change that helps or hurts would show.
+answer is in the top 3; for at least 3 of 5 it is rank 1."* Those numbers
+were 4 of 5 and 3 of 5 before the change and 5 of 5 and 3 of 5 after, so the
+targets sit where the system actually is, and this unit's change would have
+shown up as a MET-from-MISSED instead of as nothing.
 
 **Criterion 3** was safe. 4 of 5 with a 0.34 gap between the groups was never
 going to miss. I'd set it to 5 of 5 and add five *near-scope* questions to
@@ -581,8 +608,8 @@ its keep and I have no evidence about it.
 three runs of it are one run. I'd keep it as a check but I wouldn't count it
 as one of the five; in its place I'd put something about the chunk prefix:
 *"For all 5 questions, the top chunk names the town the question asks
-about."* That would have caught the drive-time regression, where the top
-fused chunk was about walking, not about getting to Kestrelford.
+about."* That would have caught the first-version drive-time regression, where
+the top fused chunk was about walking, not about getting to Kestrelford.
 
 **Criterion 5** I'd keep, but tighten the wording so a three-file citation
 for a one-file fact counts as a partial miss: *"names exactly the file(s)
