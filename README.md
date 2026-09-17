@@ -425,34 +425,84 @@ one with a space). Nothing upstream of generation moved between runs.
 
 ## The Improvement
 
-**What I changed:**
+**What I changed:** hybrid search. `store.py::search` now retrieves the top 20
+chunks by embedding distance, ranks all 94 chunks by BM25 keyword score
+(`rank_bm25`, already in `requirements.txt`), fuses the two lists with
+reciprocal rank fusion (score = Σ 1/(60 + rank)), and returns the fused top 5.
+Every returned chunk keeps its real cosine distance, and the chunk the
+embedding ranked first is always kept, so the relevance gate sees exactly the
+same best distance as before and criterion 3 cannot move. `HYBRID_SEARCH = True`
+in `config.py` is the switch; `False` gives back the unit 1 system exactly.
+This is the only change to the pipeline in this unit. Chunker, cutoff, top-k,
+prompt and model are as submitted.
 
-**Why I picked it:**
-
-<!-- Connect it to a specific diagnosis above in one sentence. If you can't,
-     you picked a fix because it sounded impressive. -->
+**Why I picked it:** the diagnosis above found that for two of five questions
+the answer chunk lost to neighbours that share the topic but not the exact
+term ("fill", "easiest"), and that BM25 alone ranked those chunks first or
+second. Keyword matching is the missing signal, so I added it.
 
 ### Run Log — After
 
-<!-- Same format, same five criteria, three runs each.
-     `python run_eval.py --label after` -->
+Produced by `python run_eval.py --label after`
+(`results/run_2026-09-16_1720_after.md`, `run_eval.py::main`), aggregated by
+`tools/criteria_table.py`. Same five questions, same three runs, cache off.
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Retrieved chunk contains the answer | 4 of 5 |  |  |  |  |
-| 2. Every answer names a source | 5 of 5 |  |  |  |  |
-| 3. Gate stops out-of-corpus questions | 4 of 5 |  |  |  |  |
-| 4. | | | | | |
-| 5. | | | | | |
+| 1. Retrieved chunk contains the answer | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 2. Every answer names a source | 5 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 3. Gate stops out-of-corpus questions | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 4. Every chunk 120–900 chars, at most one heading | 94 of 94 | 94/94 | 94/94 | 94/94 | MET |
+| 5. Named source contains the answer | 5 of 5 | 5/5 | 5/5 | 5/5 | MET |
 
-**Did it help?**
+Side by side, the table is identical to Before. The criteria as written
+cannot see this change, which is itself a finding (see What I'd Do
+Differently). The number the diagnosis was actually about is the rank of the
+answer chunk, and that did move:
 
-<!-- Say plainly whether it did, and how you know. If it made things worse,
-     say that — a change that backfired, honestly reported, earns full credit
-     and is more interesting than one that worked. What matters is that you can
-     tell.
+| Question | Rank before (embedding only) | Rank after (hybrid) |
+|---|---|---|
+| Drive time to Kestrelford | 1 | **5** |
+| Halden Bay car parks | 2 | **1** |
+| Kestrelford tower price | 1 | 1 |
+| Easiest town with limited mobility | 4 | **2** |
+| Best time for Halden Bay | 1 | 1 |
+| *Answer in top 3* | 4 of 5 | 4 of 5 |
+| *Answer at rank 1* | 3 of 5 | 3 of 5 |
 
-     Milestone 4. -->
+Real output after the change, accessibility question, run 1
+(`generate.py::answer_from_chunks`):
+
+```
+According to the provided document, Thornby Wells is the easiest town in the region to get around with limited mobility because it is flat, compact, and everything is close together.
+
+Source: guide_accessibility.md
+```
+
+**Did it help?** Partly, and it also broke something, and I can tell which
+is which.
+
+- It fixed the two cases the diagnosis named. The car-park answer chunk went
+  from rank 2 to 1 and the accessibility chunk from rank 4 to 2. The
+  mechanism worked as predicted: BM25 credited "fill" and "easiest".
+- It hurt the drive-time question, which went from rank 1 to rank 5, and it
+  is at 5 only because of the rule that always keeps the embedding's
+  top chunk. Without that safeguard the answer would have dropped out of the
+  top 5 entirely and criterion 1 would have gone to 4 of 5. The mechanism:
+  BM25 has no stemming and no stop-word list, so "how long does it take to
+  drive from Brightwater to Kestrelford" scores chunks on "long", "take",
+  "from", "Brightwater", "Kestrelford". The answer chunk says "Driving takes
+  55 minutes", and neither "driving" nor "takes" matches. BM25's top chunk
+  for that question was "Walking in the region — Seasonal notes", which
+  mentions both town names and the word "take", and the fusion let four such
+  chunks outrank the real answer.
+- Net on the measure I set out to move (answer in top 3): 4 of 5 before, 4
+  of 5 after. Different question missing each time. So by my own metric it
+  did not help, even though it fixed exactly what it was aimed at.
+
+Criterion 3 is unchanged at 5 of 5 with identical distances (0.808 to 0.982),
+as designed. Criteria 2 and 5 held at 5 of 5 on all three runs; the model
+still cited the right file in every answer.
 
 ## What's Still Broken
 

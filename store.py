@@ -199,9 +199,15 @@ def search(
             f"No index called '{name}'. Run `python app.py index` first."
         ) from exc
 
+    hybrid = getattr(config, "HYBRID_SEARCH", False)
+    depth = min(
+        getattr(config, "HYBRID_CANDIDATES", top_k) if hybrid else top_k,
+        collection.count(),
+    )
+
     raw = collection.query(
         query_embeddings=embed([question]),
-        n_results=min(top_k, collection.count()),
+        n_results=depth,
     )
 
     results: list[Result] = []
@@ -217,7 +223,104 @@ def search(
                 produced_by=str(meta.get("produced_by", "unknown")),
             )
         )
-    return results
+
+    if not hybrid:
+        return results[:top_k]
+    return _fuse_with_keywords(question, results, collection, top_k)
+
+
+# ─── Hybrid search (unit 2 improvement) ──────────────────────────────────────
+#
+# The embedding ranking rewards topical overlap. On city_guides that put the
+# chunk containing "fill by 10am" behind the chunk about "the parking problem",
+# and the chunk that says "Thornby Wells is the easiest town" behind two
+# neighbours that are merely about mobility. Keyword search rewards the exact
+# term. Reciprocal rank fusion combines the two rankings without having to
+# put cosine distances and BM25 scores on the same scale.
+
+_bm25_cache: dict[str, tuple] = {}
+
+
+def _tokenize(text: str) -> list[str]:
+    import re
+
+    return re.findall(r"[a-z0-9£]+", text.lower())
+
+
+def _bm25_for(collection):
+    """Build (once per collection) a BM25 index over every chunk in it."""
+    key = collection.name
+    if key not in _bm25_cache:
+        from rank_bm25 import BM25Okapi
+
+        everything = collection.get(include=["documents", "metadatas"])
+        labels = [
+            f"{m.get('source', 'unknown')}#{m.get('index', 0)}"
+            for m in everything["metadatas"]
+        ]
+        docs = everything["documents"]
+        metas = everything["metadatas"]
+        bm25 = BM25Okapi([_tokenize(d) for d in docs])
+        _bm25_cache[key] = (bm25, labels, docs, metas)
+    return _bm25_cache[key]
+
+
+def _fuse_with_keywords(question: str, vector_results: list[Result], collection, top_k: int) -> list[Result]:
+    """
+    Reciprocal rank fusion of the embedding ranking and a BM25 ranking.
+
+    Each chunk scores 1/(60 + rank) in every list it appears in; lists are the
+    top HYBRID_CANDIDATES from each side. The chunk the embedding ranked first
+    is always kept, so the relevance gate sees the same best distance it would
+    have seen without hybrid search. Chunks that only BM25 found get their real
+    cosine distance computed so the gate and the printout stay honest.
+    """
+    k = 60.0
+    bm25, labels, docs, metas = _bm25_for(collection)
+    depth = getattr(config, "HYBRID_CANDIDATES", top_k)
+
+    scores = bm25.get_scores(_tokenize(question))
+    keyword_order = sorted(range(len(labels)), key=lambda i: -scores[i])
+    keyword_order = [i for i in keyword_order if scores[i] > 0][:depth]
+
+    fused: dict[str, float] = {}
+    by_label: dict[str, Result] = {r.label: r for r in vector_results}
+
+    for rank, r in enumerate(vector_results, 1):
+        fused[r.label] = fused.get(r.label, 0.0) + 1.0 / (k + rank)
+
+    missing: list[int] = []
+    for rank, i in enumerate(keyword_order, 1):
+        label = labels[i]
+        fused[label] = fused.get(label, 0.0) + 1.0 / (k + rank)
+        if label not in by_label:
+            missing.append(i)
+
+    # Chunks BM25 surfaced that the embedding's candidate list didn't include
+    # still need a real distance. One extra embedding call for the question
+    # and a cosine against each such chunk's stored vector.
+    if missing:
+        stored = collection.get(ids=[labels[i] for i in missing], include=["embeddings"])
+        qvec = embed([question])[0]
+        qnorm = sum(x * x for x in qvec) ** 0.5
+        for i, vec in zip(missing, stored["embeddings"]):
+            vec = list(vec)
+            dot = sum(a * b for a, b in zip(qvec, vec))
+            vnorm = sum(x * x for x in vec) ** 0.5
+            distance = 1.0 - dot / (qnorm * vnorm) if qnorm and vnorm else 1.0
+            by_label[labels[i]] = Result(
+                text=docs[i],
+                source=str(metas[i].get("source", "unknown")),
+                label=labels[i],
+                distance=float(distance),
+                produced_by=str(metas[i].get("produced_by", "unknown")),
+            )
+
+    ordered = sorted(fused, key=lambda lbl: -fused[lbl])
+    chosen = ordered[:top_k]
+    if vector_results and vector_results[0].label not in chosen:
+        chosen[-1] = vector_results[0].label   # the gate must see the true best
+    return [by_label[lbl] for lbl in chosen]
 
 
 def index_exists(corpus: str | None = None, variant: str = "default") -> bool:

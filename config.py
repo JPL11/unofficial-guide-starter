@@ -35,6 +35,13 @@ CHUNK_OVERLAP = 120     # characters shared between neighbouring chunks
 
 TOP_K = 5               # how many chunks to pull back per question
 
+# Unit 2 improvement: hybrid search. When True, `store.search` combines the
+# embedding ranking with a BM25 keyword ranking (reciprocal rank fusion) and
+# returns the fused top-k. Each result keeps its cosine distance, so the gate
+# is unchanged. Set to False to get the unit 1 behaviour back exactly.
+HYBRID_SEARCH = True
+HYBRID_CANDIDATES = 20  # how deep each ranking goes before fusing
+
 # The relevance gate. If the best chunk is further away than this, the system
 # refuses to answer instead of handing the model thin material.
 #
