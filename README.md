@@ -249,27 +249,91 @@ citation to be the file the answer actually came from (criterion 5).
 
 ## Run Log — Before
 
-<!-- Your five criteria, three runs each. `python run_eval.py --label before`
-     runs the questions, puts the OUT_OF_SCOPE ones through the gate, and
-     writes it all into results/ for you. Targets come from criteria.md; the
-     verdict column is your call.
-
-     Criterion 3 is measured in one deterministic pass rather than three, so
-     the same number goes in all three run columns. That's correct, not lazy.
-
-     Milestone 1. -->
+Produced by `python run_eval.py --label before` (file:
+`results/run_2026-09-16_1716_before.md`, function `run_eval.py::main`), with
+`scorer.py::judge` marking each answer, and aggregated one row per criterion by
+`tools/criteria_table.py`. Same corpus, chunker, cutoff (0.65) and top-k (5) as
+submitted in unit 1. Cache off, three real model calls per question.
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Retrieved chunk contains the answer | 4 of 5 |  |  |  |  |
-| 2. Every answer names a source | 5 of 5 |  |  |  |  |
-| 3. Gate stops out-of-corpus questions | 4 of 5 |  |  |  |  |
-| 4. | | | | | |
-| 5. | | | | | |
+| 1. Retrieved chunk contains the answer | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 2. Every answer names a source | 5 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 3. Gate stops out-of-corpus questions | 4 of 5 | 5/5 | 5/5 | 5/5 | MET |
+| 4. Every chunk 120–900 chars, at most one heading | 94 of 94 | 94/94 | 94/94 | 94/94 | MET |
+| 5. Named source contains the answer | 5 of 5 | 5/5 | 5/5 | 5/5 | MET |
 
-<!-- Underneath, paste the REAL output for each criterion from one of your
-     runs — the actual text your system produced, not a description of it.
-     Name the file and function that produced it. -->
+Criteria 1, 3 and 4 are the same in all three columns because retrieval,
+the gate and the chunker are deterministic; one pass is the whole
+measurement. Criteria 2 and 5 depend on the generated answer and were
+checked against each of the three answers.
+
+How each row was counted:
+
+- **1.** `store.search` re-run per question; pass if any of the 5 returned
+  chunks contains the `expects` phrase (case and whitespace ignored).
+- **2.** The answer contains a `Source:` line naming at least one corpus file,
+  and is not the refusal string.
+- **3.** From the run file's gate table: 5 of 5 `OUT_OF_SCOPE` questions
+  refused, best distances 0.808 to 0.982.
+- **4.** `chunker.split_documents` re-run; every chunk checked for length and
+  heading count. 94 chunks, zero violations.
+- **5.** Every file the `Source:` line names contains the `expects` phrase.
+
+Real output, one run per criterion:
+
+**Criterion 1** — retrieval for the accessibility question, run 1
+(`store.py::search`). The answer chunk came back, but fourth:
+
+```
+#   distance   source
+1   0.4649     guide_accessibility.md#0   (intro: "An honest assessment rather than...")
+2   0.5024     guide_accessibility.md#3   (Difficult)
+3   0.5350     guide_corry_vale.md#2
+4   0.5484     guide_accessibility.md#1   (Straightforward: "Thornby Wells is the easiest town...")
+5   0.5514     guide_corry_vale.md#0
+```
+
+**Criterion 2 and 5** — the tower question, run 2 (`generate.py::answer_from_chunks`):
+
+```
+It costs £2 to climb the parish church tower in Kestrelford.
+
+Source: guide_kestrelford.md
+```
+
+`guide_kestrelford.md` is the only file containing "£2".
+
+**Criterion 3** — the gate table from the run file (`run_eval.py::check_out_of_scope`):
+
+```
+| Out-of-scope question | Best distance | Gate |
+| What is the capital of Mongolia? | 0.808 | refused |
+| How do I change the oil in a diesel engine? | 0.881 | refused |
+| Who won the 1994 World Cup? | 0.982 | refused |
+| What is the recommended dosage of ibuprofen for a headache? | 0.835 | refused |
+| How do I write a for loop in Rust? | 0.859 | refused |
+```
+
+**Criterion 4** — `python app.py index` summary line (`chunker.py::describe`):
+
+```
+chunked  94 chunks, 317 characters on average (shortest 171, longest 757), produced by chunker.py::split_documents
+```
+
+**Criterion 2 and 5, the run that moved** — the car-park question across three
+runs. The wording changed each time, the source line did not:
+
+```
+run 1: The Halden Bay car parks fill up by 10am on summer weekends.
+run 2: On summer weekends, the parking lots in Halden Bay fill by 10am.
+run 3: The parking lots in Halden Bay fill up by 10 am on summer weekends.
+       Source: guide_halden_bay.md, guide_seasons.md, guide_regional_transport.md
+```
+
+Run 3 wrote "10 am" with a space against an `expects` of "10am". That is
+why `scorer.py` compares with whitespace removed; a reader would not call
+that answer wrong.
 
 ## Verdicts
 
