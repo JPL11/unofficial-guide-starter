@@ -337,22 +337,23 @@ that answer wrong.
 
 ## Verdicts
 
-<!-- MET or MISSED for each of the five, against the target you wrote last
-     unit — not a new one. Plus a sentence on how you decided. That sentence
-     matters most where it was close.
-
-     If your target said 4 of 5 and your runs came out 4, 3, 4, that's a MISS.
-     The target has to hold, not show up occasionally.
-
-     Milestone 2. -->
+Against the targets in `criteria.md` as written in unit 1. No criterion was
+revised.
 
 | # | Criterion | Verdict | How I decided |
 |---|---|---|---|
-| 1 |  |  |  |
-| 2 |  |  |  |
-| 3 |  |  |  |
-| 4 |  |  |  |
-| 5 |  |  |  |
+| 1 | Retrieved chunks contain the answer, 4 of 5 | **MET** | 5 of 5 in every run, and retrieval is deterministic so the three columns can't differ. The honest caveat: two of the five only pass because top-k is 5. The accessibility answer was rank 4 and the car-park answer rank 2. At the "top 3" version of this criterion it would be 4 of 5, still met, but with no margin. |
+| 2 | Every answer names a source, 5 of 5 | **MET** | All 15 answers ended with a `Source:` line naming a real corpus file, and none was the refusal string. Checked by regex in `tools/criteria_table.py`, then read by eye. |
+| 3 | Gate stops out-of-corpus questions, 4 of 5 | **MET** | 5 of 5 refused, and the closest out-of-scope distance (0.808) is 0.16 above the cutoff. This was never close. |
+| 4 | Every chunk 120–900 chars, at most one heading, all 94 | **MET** | Recomputed from `split_documents`: zero violations. The shortest chunk is 171 and the longest 757, so both bounds have room. |
+| 5 | Named source contains the answer, 5 of 5 | **MET** | This was the one I expected to be close. The car-park answer named three files every run, and I counted it as a pass only because all three genuinely contain "10am" (the fact is repeated in the town guide, the seasons guide and the transport guide). Had it named a file that merely mentions Halden Bay parking without the time, it would have been a miss. |
+
+The one I argued with myself over is criterion 5 on the car-park question.
+Naming three sources for a one-number fact is not wrong, but it is less useful
+than naming one, and the criterion as written can't tell the difference. That
+is a measurement gap, not a miss; it goes in What I'd Do Differently rather
+than as a revision, because the original still measures something real
+(no wrong file was ever cited).
 
 ## Diagnoses
 
