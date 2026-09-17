@@ -357,23 +357,71 @@ than as a revision, because the original still measures something real
 
 ## Diagnoses
 
-<!-- For each miss: which stage caused it, and how. The stage alone isn't
-     enough — you need the mechanism.
+**No criterion was missed.** So the honest question is whether the targets
+were safe. Partly, yes:
 
-     Not a diagnosis: "Question 3 didn't work."
-     A diagnosis:     "Question 3 asks about laundry costs. The answer is in
-                       one sentence that got split across two chunks, so
-                       neither chunk on its own contains it."
+- Criterion 3 (gate, 4 of 5) was never in danger. The gap between the two
+  groups of distances is 0.34 wide. "5 of 5" would have been the right target
+  for this corpus, and I'd tighten it to that.
+- Criterion 4 (chunk bounds) is a property of a deterministic function over a
+  fixed corpus. Once it passed on the day I wrote the chunker it could not
+  fail again without a code change. It measures something real, but three
+  runs of it are theatre.
+- Criterion 1 (4 of 5, top-k 5) is the one I'd tighten, and the run log
+  shows exactly where it is weak. Retrieval got the answer chunk into the top
+  5 for all five questions, but at these ranks:
 
-     The five stages: loading → chunking → embedding → retrieval → generation.
+| Question | Rank of the first chunk containing the answer |
+|---|---|
+| Drive time to Kestrelford | 1 |
+| Halden Bay car parks | 2 |
+| Kestrelford tower price | 1 |
+| Easiest town with limited mobility | **4** |
+| Best time for Halden Bay | 1 |
 
-     Look for a pattern. If three misses all ask about numbers, that's one
-     problem, not three.
+That is 4 of 5 at top-3 and 3 of 5 at top-1. Two of five answers are being
+found by the margin top-k gives, not by retrieval ranking them where they
+belong. That is a near miss, and it has a mechanism, so I'm diagnosing it as
+if it were one.
 
-     Missed nothing? Say so, then say honestly whether your targets were set
-     low, and which one you'd tighten and to what.
+**Stage: retrieval (embedding similarity).** Mechanism, two cases with the same
+shape:
 
-     Milestone 3. -->
+- *Halden Bay car parks.* The closest chunk (0.289) is "Halden Bay — When to
+  go", which talks about "the parking problem" in July and August. It's about
+  the right topic, but it never says 10am. The chunk with the answer,
+  "Halden Bay — Getting there", is at 0.326. The embedding is matching the
+  question's "summer weekends" to the seasonal chunk harder than it matches
+  "car parks fill" to the chunk that literally says "fill by 10am". Semantic
+  similarity is doing what it does: rewarding topical overlap, not the exact
+  term.
+- *Easiest town with limited mobility.* The top chunk (0.465) is the
+  accessibility guide's intro, which says "some of these places are difficult"
+  and nothing else. Second is its "Difficult" section. The "Straightforward"
+  section, which opens with "Thornby Wells is the easiest town in the region",
+  is fourth at 0.548. Same mechanism: every section of that guide is about
+  mobility, so they all score similarly on meaning, and the one that contains
+  the exact word "easiest" gets no credit for it.
+
+**The pattern:** both weak questions contain an exact term ("fill", "easiest")
+that appears in the answer chunk and not in its competitors, and the
+competitors win on general topic. That is the textbook case for adding
+keyword matching alongside the embedding. As a check before building
+anything, I ran BM25 alone over the 94 chunks for these two questions
+(`rank_bm25`, the package already in `requirements.txt`):
+
+```
+Halden Bay car parks:         BM25 rank 1 = guide_regional_transport.md#2 (contains "10am")
+                              BM25 rank 2 = guide_halden_bay.md#1        (contains "10am")
+Easiest with limited mobility: BM25 rank 1 = guide_accessibility.md#1     (the answer chunk)
+```
+
+Keyword search puts the answer at rank 1 or 2 for both questions where the
+embedding had it at 2 and 4. That is what the improvement below is built on.
+
+Not a diagnosis, but worth recording: the only non-determinism in the whole
+system is the generated wording (three different phrasings of "fill by 10am",
+one with a space). Nothing upstream of generation moved between runs.
 
 ## The Improvement
 
